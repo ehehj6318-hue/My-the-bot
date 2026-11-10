@@ -1,0 +1,14 @@
+{
+  "total_views": 0,
+  "today_date": "",
+  "today_views": 0,
+  "success_count": 0,
+  "fail_count": 0,
+  "mode": "paid",
+  "default_credits": 1,
+  "users": [],
+  "cracked_history": [],
+  "today_users": [],
+  "cooldown_seconds": 60,
+  "max_concurrent_tasks": 15
+}

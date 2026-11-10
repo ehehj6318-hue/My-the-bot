@@ -1,2 +1,7 @@
-python-telegram-bot==20.7
-Flask==2.3.3
+pyTelegramBotAPI
+requests
+urllib3
+python-dotenv
+ddddocr
+pymupdf
+phonenumbers
