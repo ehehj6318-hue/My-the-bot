@@ -13,6 +13,9 @@ BASE_URL = "https://tathya.uidai.gov.in"
 CAPTCHA_URL = f"{BASE_URL}/audioCaptchaService/api/captcha/v3/generation"
 RETRIEVE_URL = f"{BASE_URL}/retrieveEidUid/ext/v1/generic/retrieveuideid"
 
+# Initialize OCR ONCE globally to save CPU/RAM
+ocr = ddddocr.DdddOcr(show_ad=False)
+
 def run_retrieval(name, dob, mobile):
     if name == "WAIT_INPUT" or dob == "WAIT_INPUT":
         print("🔑 WAITING_FOR_NAME_DOB")
@@ -30,16 +33,15 @@ def run_retrieval(name, dob, mobile):
     if dob == "None" or dob == "null" or dob == "":
         dob = None
 
-    # Session starts here (to maintain cookies)
     session = requests.Session()
+    # Reduced retries to prevent infinite hang on blocked datacenter IPs
     from requests.adapters import HTTPAdapter
     from urllib3.util import Retry
-    retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    retries = Retry(total=1, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retries))
     
     request_id = str(uuid.uuid4())
 
-    # Strict Browser-like Headers
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en_IN",
@@ -56,13 +58,14 @@ def run_retrieval(name, dob, mobile):
     }
 
     print("--- STEP 1: Fetching Captcha ---")
+    sys.stdout.flush()
+    
     captcha_payload = {
         "captchaLength": "6", 
         "captchaType": "2", 
         "audioCaptchaRequired": True
     }
     
-    # Generate list of name candidates (prefixes) to try sequentially
     candidate_names = []
     name_clean = name.strip()
     
@@ -75,7 +78,7 @@ def run_retrieval(name, dob, mobile):
 
     cap_txn_id = None
     otp_txn_id = None
-    last_server_msg = "Failed to send OTP. Try changing prefix to 'Mrs. ' or 'Ms. ' in the code."
+    last_server_msg = "Failed to send OTP. Try changing prefix."
     
     success_details_payload = None
     success_captcha_val = None
@@ -85,6 +88,7 @@ def run_retrieval(name, dob, mobile):
         if technical_diff:
             break
         print(f"🔍 [RETRIEVAL] Trying name payload: '{full_name}'...")
+        sys.stdout.flush()
         
         max_captcha_retries = 3
         attempt = 1
@@ -95,12 +99,13 @@ def run_retrieval(name, dob, mobile):
         while attempt <= max_captcha_retries and captcha_attempts < max_captcha_attempts:
             captcha_attempts += 1
             try:
-                res_cap = session.post(CAPTCHA_URL, json=captcha_payload, headers=headers, timeout=30)
+                # Reduced timeout to 10s so bot doesn't hang for minutes
+                res_cap = session.post(CAPTCHA_URL, json=captcha_payload, headers=headers, timeout=10)
                 res_cap.raise_for_status()
                 try:
                     cap_data = res_cap.json()
                 except ValueError:
-                    raise Exception("Aadhaar Portal returned an invalid non-JSON page during captcha load. Gateway might be down.")
+                    raise Exception("Aadhaar Portal returned an invalid non-JSON page.")
                 
                 if not cap_data or 'imageBase64' not in cap_data or 'transactionId' not in cap_data:
                     raise Exception("UIDAI captcha generation failed. Invalid server response.")
@@ -108,7 +113,6 @@ def run_retrieval(name, dob, mobile):
                 img_b64 = cap_data['imageBase64']
                 cap_txn_id = cap_data['transactionId']
 
-                # Solve captcha with ddddocr
                 img_bytes = base64.b64decode(img_b64)
                 if attempt >= 3:
                     print(f"🔑 MANUAL CAPTCHA REQUIRED | {img_b64}")
@@ -117,16 +121,18 @@ def run_retrieval(name, dob, mobile):
                     if not captcha_val:
                         raise Exception("No manual captcha entered.")
                 else:
-                    ocr = ddddocr.DdddOcr(show_ad=False)
+                    # Using global OCR instance
                     res = ocr.classification(img_bytes)
                     captcha_val = str(res or '').strip()
                     captcha_val = re.sub(r'[^a-zA-Z0-9]', '', captcha_val)
                     
                     if len(captcha_val) != 6:
-                        print(f"⚠️ [OCR] Rejected noisy read '{captcha_val}' (Length {len(captcha_val)} != 6). Fetching new captcha...")
+                        print(f"⚠️ [OCR] Rejected noisy read '{captcha_val}'. Fetching new captcha...")
+                        sys.stdout.flush()
                         continue
                     
                 print(f"Decoded Captcha: {captcha_val}")
+                sys.stdout.flush()
                 
                 details_payload = {
                     "name": full_name,
@@ -141,42 +147,51 @@ def run_retrieval(name, dob, mobile):
                     "resendOtp": False
                 }
 
-                res_otp = session.post(RETRIEVE_URL, json=details_payload, headers=headers, timeout=45)
+                res_otp = session.post(RETRIEVE_URL, json=details_payload, headers=headers, timeout=15)
                 try:
                     otp_res_json = res_otp.json()
                 except ValueError:
-                    raise Exception("Aadhaar Portal returned an invalid non-JSON page during EID search. Gateway might be down.")
+                    raise Exception("Aadhaar Portal returned an invalid non-JSON page during EID search.")
 
                 res_data = otp_res_json.get('responseData') or {}
                 if otp_res_json.get('status') == "Success" or res_data.get('otpSent'):
                     otp_txn_id = res_data.get('otpTxnId')
                     if otp_txn_id:
                         print(f"✅ OTP Sent Successfully for Name: {full_name}")
+                        sys.stdout.flush()
                         candidate_success = True
                         success_details_payload = details_payload
                         success_captcha_val = captcha_val
                         break
 
-                # If not broken by success, log the response and check for errors
                 msg = res_data.get('message') or otp_res_json.get('message') or ''
                 print(f"Server Response for '{full_name}' (Attempt {attempt}): {msg}")
+                sys.stdout.flush()
                 if msg:
                     last_server_msg = msg
 
                 if msg and "technical difficulties" in msg.lower():
                     technical_diff = True
-                    last_server_msg = f"⚠️ UIDAI portal is temporarily facing technical difficulties with this number. Please try again after 1 hour or try with another number. ||| Real Server Response: {msg}"
+                    last_server_msg = f"⚠️ UIDAI portal is temporarily facing technical difficulties. ||| Real Server Response: {msg}"
                     break
 
                 if msg and any(x in msg.lower() for x in ["mismatch", "no record", "validation failed", "invalid"]):
-                    print(f"📦 Response for '{full_name}': {msg}. Trying next name payload candidate...")
+                    print(f"📦 Response for '{full_name}': {msg}. Trying next name...")
+                    sys.stdout.flush()
                     break
 
-                # Captcha issue, loop continues to retry for current candidate
+                attempt += 1
+            except requests.exceptions.RequestException as ex:
+                # THIS WILL TRIGGER IF UIDAI BLOCKS THE IP
+                print(f"❌ [NETWORK ERROR] UIDAI blocked the connection or timed out: {ex}")
+                sys.stdout.flush()
+                if attempt >= max_captcha_retries:
+                    raise Exception("UIDAI is blocking Railway's IP. Try running bot on a local PC or a proxy.")
                 attempt += 1
             except Exception as ex:
-                if attempt == max_captcha_retries or captcha_attempts == max_captcha_attempts:
+                if attempt >= max_captcha_retries or captcha_attempts >= max_captcha_attempts:
                     print(f"⚠️ Error for '{full_name}' on attempt {attempt}: {ex}")
+                    sys.stdout.flush()
                     break
         
         if technical_diff:
@@ -187,7 +202,6 @@ def run_retrieval(name, dob, mobile):
     if not otp_txn_id:
         raise Exception(last_server_msg)
 
-    # Prompt for OTP
     print("\n" + "="*60)
     print("🔑 ENTER THE OTP RECEIVED ON YOUR REGISTERED MOBILE")
     sys.stdout.flush()
@@ -202,7 +216,7 @@ def run_retrieval(name, dob, mobile):
     final_payload["otpTxnId"] = otp_txn_id
     final_payload["captcha"] = success_captcha_val 
 
-    res_final = session.post(RETRIEVE_URL, json=final_payload, headers=headers, timeout=45)
+    res_final = session.post(RETRIEVE_URL, json=final_payload, headers=headers, timeout=15)
     final_data = res_final.json()
 
     if final_data.get('status') == "Success":
@@ -228,7 +242,6 @@ if __name__ == "__main__":
         DOB = sys.argv[2]
         MOBILE = sys.argv[3]
     else:
-        # Prompt user dynamically if no arguments are provided
         print("Please enter Aadhaar Holder Name (with prefix if any):")
         sys.stdout.flush()
         NAME = sys.stdin.readline().strip()
