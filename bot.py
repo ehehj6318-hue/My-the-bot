@@ -117,8 +117,8 @@ def check_startup_requirements():
         if not env_exists or not token_found:
             print("👉 3. Configure environment settings:")
             print("   Create a '.env' file in the bot root folder containing:")
-            print("   TELEGRAM_BOT_TOKEN=8705250266:AAFd7iFVF4LIL3AeCZu0Rhx98P3OS1ZkhAg")
-            print("   ADMIN_IDS=ADMIN_ID_1,ADMIN_ID_2\n")
+            print("   TELEGRAM_BOT_TOKEN=9268530335:AAH_ck6UsUW-mwcIbZkee-vHMMO86z8ID3o")
+            print("   ADMIN_IDS=8964939517,ADMIN_ID_2\n")
             
         print("============================================================")
         sys.exit(1)
@@ -151,7 +151,7 @@ if not TOKEN:
     print("❌ Error: TELEGRAM_BOT_TOKEN is not defined in the environment or .env file.")
     sys.exit(1)
 
-DEVELOPER_USERNAME = os.getenv('DEVELOPER_USERNAME', '@ShadowCipherX1')
+DEVELOPER_USERNAME = os.getenv('DEVELOPER_USERNAME', '@TMCASHUOT')
 
 ADMIN_IDS_RAW = os.getenv('ADMIN_IDS')
 if not ADMIN_IDS_RAW:
